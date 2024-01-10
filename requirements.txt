@@ -1,1 +1,1 @@
-requirements
+# Ver requirements.txt do projeto para deps reais
