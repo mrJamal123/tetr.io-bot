@@ -1,1 +1,2 @@
-# Ver requirements.txt do projeto para deps reais
+mss
+numpy
