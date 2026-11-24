@@ -6,10 +6,10 @@ v4: busca ataque no versus ou pontos no solo/Blitz.
   - opener lookahead prioriza DT Cannon (TSD seguido de TST), TKI e Perfect Clear quando alcancaveis;
     a busca tambem preserva Perfect Clears de 1, 2 ou 4 linhas no meio da partida.
   - a abertura evita enterrar S/Z verticalmente antes de existir estrutura para encaixa-los.
-  - durante combos, prioriza clears legais; reconhece 4-wide apenas com canal e clears alcancaveis.
   - DT Cannon: https://tetris.wiki/DT_Cannon
 
-decidir(pilha, mao, hold, proximas, permitir_hold=True, b2b=0, combo=0) -> Jogada ou None
+decidir(pilha, mao, hold, proximas, permitir_hold=True, b2b=0, combo=0,
+        bag_seguinte=None, abertura=None, linhas_lixo=0) -> Jogada ou None
   Jogada(usar_hold, letra, giros, coluna_caixa, celulas, teclas, spin, limpas, b2b, combo, valor)
     teclas : ("toque", nome) | ("das", "esq"/"dir") | ("sd", distancia_em_linhas)
     b2b, combo : estado DEPOIS da jogada (o bot passa de volta na proxima)
@@ -41,13 +41,11 @@ COL_SPAWN = {"I": 3, "O": 4, "T": 3, "S": 3, "Z": 3, "J": 3, "L": 3}  # coluna d
 LINHA_SPAWN = 0          # linha (0 = topo lido) da caixa da peca ao nascer (SPAWN_LINHAS do tetrio_projeto)
 # ---------- ajustes ----------
 USAR_SPINS = True        # False: sem T-spin (--sem-spin no jogar.py)
-USAR_POCOS_I = False     # False: nao constroi poco de 1 coluna nem 4-wide (dependencia de I)
-USAR_COMBOS = False      # nao sacrifica a pilha/B2B para emendar clears fracos
 MODO = "ataque"          # TETR.IO multiplayer por padrao; use "blitz" para jogo solo
 DAS_MIN = 6              # DAS 9F (150 ms): so compensa em parede com 6+ colunas (toque ~25 ms cada)
 PESO_VALOR = 6.5         # favorece ataques enviados, inclusive T-spins e tetrises
 CUSTO_ABERTURA_SZ_VERTICAL = 1.0
-CUSTO_CLEAR_PEQUENO = {1: 60.0, 2: 42.0, 3: 30.0}   # 1/2/3 linhas sem spin em pilha segura: so como ultimo recurso (3x o valor anterior; ver simulacao)
+CUSTO_CLEAR_PEQUENO = {1: 11.0, 2: 7.0, 3: 3.0}   # clear seco so e desperdicio com a pilha baixa; a partir de ALTURA_DOWNSTACK ele baixa a pilha e vale a pena
 CUSTO_USO_I = 8.0
 BONUS_I_PAREDE = 1.5
 BONUS_I_SOBRE_APOIO = 1.5
@@ -55,9 +53,9 @@ BONUS_PERFECT_CLEAR = 5.0
 BONUS_PCO_POTENCIAL = 30.0
 BONUS_TSPIN_SETUP = {1: 16.0, 2: 29.0, 3: 42.0}  # clear full alcancavel por SRS
 FATOR_ATAQUE_TSPIN_SETUP = 0.2
-BONUS_TSPIN_SETUP_STAGE = {1: 4.0, 2: 8.0}  # incentiva construir o slot com T visivel
-TSPIN_SETUP_CANDIDATES = 1  # candidatos do beam que recebem busca SRS generica
-TSPIN_SETUP_GEOMETRY_CANDIDATES = 1
+BONUS_TSPIN_SETUP_STAGE = {1: 6.0, 2: 13.0}  # valor de cada estagio do slot, sempre limitado pela altura
+TSPIN_SETUP_CANDIDATES = 2  # candidatos do beam que recebem busca SRS generica
+TSPIN_SETUP_GEOMETRY_CANDIDATES = 2
 FINAL_EXACT_CANDIDATES_PER_ROOT = 1
 BONUS_TKI_SETUP = 8.0
 BONUS_TKI_CLEAR = 35.0
@@ -67,48 +65,34 @@ BONUS_DT_CANNON = 45.0
 CUSTO_CLEAR_MOLDE = 40.0   # clear sem ataque pode destruir o encaixe do DT
 BONUS_SAVE_T_MOLDE = 45.0   # no molde do DT os dois T sao reservados para o TSD e o TST
 CUSTO_GASTAR_T = 18.0       # penaliza jogar T sem T-spin full quando ja existe slot de TSD montado
-BONUS_4W_CLEAR = 24.0
-MIN_4W_COMBO = 10
-MIN_4W_BASE = 3          # camadas de tres residuais exigidas para abrir um 4-wide
-BONUS_SOBREVIVENCIA = 12.0  # por linha limpa quando a pilha ja esta perigosa
-ALTURA_PERIGO = LINHAS - 3  # zona de emergencia nas tres linhas finais; nao e condicao de derrota
-CUSTO_PERIGO = 3.0
+ALTURA_ALVO = 4             # superficie de trabalho: a pilha de um jogador forte fica baixa
+ALTURA_DOWNSTACK = 7        # daqui para cima a altura manda: nenhum setup paga o risco
+ALTURA_MANOBRA = 10         # teto de manobra: acima disto so baixar a pilha importa
+ALTURA_PERIGO = LINHAS - 3  # altura em que os filtros de B2B/clear fraco param de agir
 BONUS_TSPIN = 34.0        # T-spin cheio vale alem do ataque tabelado (e antes de guardar o slot)
 BONUS_TETRIS = 6.0        # quad puro: fecha B2B com 4 linhas e paga o custo de manter o poco
 FATOR_SEM_T = 0.6        # conserva setups de TSD enquanto se constroi sem T visivel
-FATOR_SEM_I = 0.35       # limita setups de I quando ele nao esta proximo/disponivel
-ALTURA_MIN_COMBO_WELL = 10
-ALTURA_MAX_4W_SETUP = 11
 W = dict(
-    soma=0.10,           # altura somada das colunas
+    soma=0.26,           # altura somada das colunas: manter a pilha baixa e o objetivo principal
     buraco=32.0,         # nao compensa enterrar buracos por um clear comum
     coberto=5.0,         # blocos que ficam acima de celulas vazias
     trans=0.12,          # transicoes de linha (pilha "esburacada" na horizontal)
     rug=0.65,            # rugosidade (degraus entre colunas); degrau >= 3 pesa mais
     dip=1.8,             # coluna funda e estreita no meio (so aceita I)
-    altura=1.3,          # por linha acima de ALTURA_SEGURA (cresce com a potencia 1.5)
+    altura=3.0,          # por linha acima de ALTURA_ALVO (cresce com a potencia 1.5)
     altura_max=0.5,      # penalidade incremental por altura total
     poco_largo=3.0,      # 3-wide/4-wide sao dependencias: canal largo custa caro
     dependencia=3.0,     # por peca que nao encaixa sem aumentar os buracos
-    slot=58.0,           # forte incentivo para construir TSD em vez de abandonar o setup
-    quad_run=0.0,        # (era 4.5) nao incentiva linha pronta de descarte no poco
-    poco=0.0,            # (era 1.0) poco de borda so serve para quad com I
-    b2b=7.0,             # por nivel de B2B mantido (ate 8): a cadeia e o que paga o ataque (era 4.5)
-    combo=0.0,           # combos nao sao um objetivo estrategico do bot
-    one_wide=0.0,        # (era 4.0) nao constroi poco de 1 coluna: so o I cobre
+    slot=58.0,           # o slot de TSD e o objetivo principal do empilhamento
+    b2b=7.0,             # por nivel de B2B mantido (ate 8): a cadeia e o que paga o ataque
     poco_extra=6.0,      # cada poço de 1 coluna alem do principal (so o I cobre)
-    four_wide=0.0,       # (era 10.0) 4-wide e dependencia de I: nao incentiva mais
-    four_residual=2.5,   # premia camadas de 4-wide sustentadas com tres residuais
 )
-ALTURA_B2B = ALTURA_PERIGO  # preserva B2B ate a zona de emergencia
-ALTURA_SEGURA = 10       # acima disso o bot entra em modo de sobrevivencia (era 12): sobra margem para erros de leitura/execucao
-CUSTO_POCO_FUNDO = 2.5   # (legado) mantido para leitura de configs antigas
+ALTURA_SEGURA = 10       # altura a partir da qual o bot para de reservar o T para setup
 CUSTO_POCO_PROFUNDO = 8.0  # por casa acima de 2 num poco de 1 coluna (so o I cobre)
 CUSTO_BURACO_ESTREITO = 6.0  # celula de buraco cercada dos dois lados: so peca vertical fecha
-COMBO_FORCADO_MIN = 3    # a partir daqui, manter a cadeia de clears ja compensa
 CUSTO_QUEBRA_B2B = 16.0  # por nivel de B2B perdido ao limpar sem spin (1-3 linhas)
 ESCALA_QUEBRA_B2B = {1: 1.0, 2: 0.8, 3: 0.6}   # clears maiores ainda tem valor de downstack
-ESTAGIO = (0.0, 0.5, 0.9, 1.6)   # slot de TSD pronto (estagio 3) vale bem mais que o quad
+ESTAGIO = (0.0, 0.55, 1.0, 1.7)   # progresso do slot de TSD: pronto (3) vale bem mais que o quad
 FATOR_BONUS_TSS = 0.5    # fracao do BONUS_TSPIN pago por um T-spin single (menor = espera o TSD)
 CUSTO_HOLD = 0.2         # preferencia leve por nao usar o hold
 CUSTO_TECLA = 0.004      # desconto por acao de tecla (so desempata)
@@ -117,7 +101,7 @@ HORIZONTE_ABERTURA = 4   # abertura curta por padrao; moldes ativos usam horizon
 JANELA_ABERTURA = 14     # fase de opener padrao do TETR.IO
 PESO_MOLDE = 0.25          # orienta o opener sem sobrepor ataques fortes alcancaveis
 HORIZONTE_MOLDE = 5      # pecas de lookahead enquanto o tabuleiro ainda cabe no molde
-LARGURA = (1, 1, 1)      # largura reduzida para manter a decisao responsiva
+LARGURA = (3, 2, 2)      # 4 pecas de horizonte com alternativas: planeja o setup, nao so a peca atual
 LARGURA_PCO = (2, 1, 1, 1, 1)  # cinco pecas continuam no horizonte de abertura
 Jogada = namedtuple("Jogada", "usar_hold letra giros coluna_caixa celulas teclas spin limpas b2b combo valor",
                     defaults=(None, "", 0, 0, 0, False, 0.0))
@@ -314,77 +298,52 @@ def _ajuste_i(letra, colocacao, linhas_antes):
             ajuste += BONUS_I_SOBRE_APOIO
     return ajuste
 
-def _combo_forcado(combo, linhas):
-    """Combo so vale em defesa (pilha alta = downstack do lixo); fora disso a cadeia B2B
-    paga mais ataque do que emendar clears fracos."""
-    if not USAR_COMBOS or combo <= 0:
-        return False
-    topo = next((r for r, mascara in enumerate(linhas) if mascara), LINHAS)
-    altura = LINHAS - topo
-    if altura < ALTURA_SEGURA - 1:
-        return False
-    return combo >= COMBO_FORCADO_MIN or altura >= ALTURA_SEGURA
-
-
-def _custo_quebra_b2b(n, spin, b2b, altura, perfect_clear=False, perigo_lixo=False):
+def _custo_quebra_b2b(n, spin, b2b, altura, perfect_clear=False):
     """Limpar 1-3 linhas sem spin com B2B ativo zera a cadeia: o ataque acumulado
     (que cresce ate 8) vale mais que o alivio imediato da pilha baixa.
     Com b2b < 4 a cadeia ainda esta em carga (Surge so descarrega em b2b >= 4), entao
     reiniciar antes disso custa mais caro: era o B2B cancelado cedo para montar TSD."""
-    if not n or spin or n == 4 or b2b < 1 or perfect_clear or perigo_lixo:
+    if not n or spin or n == 4 or b2b < 1 or perfect_clear:
         return 0.0
-    if altura >= ALTURA_B2B:   # zona de risco: B2B deixa de importar (hora de limpar a pilha)
+    if altura >= ALTURA_PERIGO:   # zona de risco: B2B deixa de importar (hora de limpar a pilha)
         return 0.0
-    urgencia = max(0.0, min(1.0, (altura - (ALTURA_B2B - 3)) / 3.0))
+    inicio = ALTURA_DOWNSTACK + 2
+    urgencia = max(0.0, min(1.0, (altura - inicio) / 4.0))
     carga = 1.0 + 0.5 * max(0, 4 - b2b)
     return (CUSTO_QUEBRA_B2B * carga * ESCALA_QUEBRA_B2B.get(n, 1.0) * min(b2b, 8)
             * (1.0 - urgencia))
 
 
-def _filtrar_quebra_b2b(colocacoes, b2b, linhas, perigo_lixo=False):
+def _filtrar_quebra_b2b(colocacoes, b2b, linhas):
     """Evita gastar um B2B seguro em clear normal que nao envia ataque."""
-    if b2b < 1 or perigo_lixo or _altura_max(linhas) >= ALTURA_B2B:
+    if b2b < 1 or _altura_max(linhas) >= ALTURA_PERIGO:
         return colocacoes
     mantem_b2b = [c for c in colocacoes
                   if not c[9] or c[7] or c[9] == 4 or c[0] > 0]
     return mantem_b2b or colocacoes
 
 
-def _filtrar_clear_fraco(colocacoes, linhas, b2b=0, perigo_lixo=False):
-    """Evita clears secos de 1-3 linhas salvo lixo recebido ou risco imediato de topo."""
-    if perigo_lixo or _altura_max(linhas) >= ALTURA_PERIGO:
+def _filtrar_clear_fraco(colocacoes, linhas, b2b=0):
+    """Evita clears secos de 1-3 linhas salvo risco imediato de topo."""
+    if _altura_max(linhas) >= ALTURA_PERIGO:
         return colocacoes
     bons = [c for c in colocacoes
             if not c[9] or c[7] or c[9] == 4 or not any(c[1])]
     return bons or colocacoes
 
 
-def _filtrar_emergencia_lixo(colocacoes, perigo_lixo):
-    """Sob pressao de lixo, usa clear imediato; preserva spins/quads se tambem alcancaveis."""
-    if not perigo_lixo:
-        return colocacoes
-    clears = [c for c in colocacoes if c[9]]
-    if not clears:
-        return colocacoes
-    ataques = [c for c in clears if c[7] or c[9] == 4 or c[0] > 0]
-    return ataques or clears
-
-
-def _custo_clear_pequeno(n, spin, valor, linhas, combo=0, poco_quatro=False,
-                         profundidade_well=0, perigo_lixo=False):
+def _custo_clear_pequeno(n, spin, valor, linhas):
     """Penaliza clears pequenos de pouco ataque, inclusive minis sem ataque."""
-    if (MODO != "ataque" or spin == "full" or n not in CUSTO_CLEAR_PEQUENO or valor >= 4
-            or poco_quatro or perigo_lixo):
+    if (MODO != "ataque" or spin == "full" or n not in CUSTO_CLEAR_PEQUENO
+            or valor >= 4):
         return 0.0
     topo = next((r for r, mascara in enumerate(linhas) if mascara), LINHAS)
     altura = LINHAS - topo
-    if altura >= ALTURA_SEGURA:
+    if altura >= ALTURA_DOWNSTACK:
         return 0.0
-    urgencia = max(0.0, min(1.0, (altura - (ALTURA_SEGURA - 3)) / 3.0))
-    custo = CUSTO_CLEAR_PEQUENO[n]
-    if 0 < profundidade_well < ALTURA_MIN_COMBO_WELL:
-        custo += 1.5 * (ALTURA_MIN_COMBO_WELL - profundidade_well)
-    return custo * (1.0 - urgencia)
+    urgencia = max(0.0, min(1.0, (altura - ALTURA_ALVO)
+                            / float(max(1, ALTURA_DOWNSTACK - ALTURA_ALVO))))
+    return CUSTO_CLEAR_PEQUENO[n] * (1.0 - urgencia)
 
 
 def _limpar(cels):
@@ -406,9 +365,11 @@ def para_linhas(pilha):
     return linhas
 
 
-# ---------- gerador legado de queda reta (nao usado nas decisoes atuais) ----------
 def _colocacoes(linhas, letra):
-    """Posicoes finais por queda reta: (giros, coluna_caixa, x, y, mascaras, celulas_norm)."""
+    """Posicoes finais por queda reta: (giros, coluna_caixa, x, y, mascaras, celulas_norm).
+
+    Usada pela busca aproximada e pela contagem de dependencia (sem giros/kicks).
+    """
     topo = next((i for i, v in enumerate(linhas) if v), LINHAS)
     for k, minc, w, h, norm, masc in FORMAS[letra]:
         for x in range(COLUNAS - w + 1):
@@ -738,13 +699,42 @@ def _slots_detalhes_cache(linhas):
     return prontos, estagio, setups
 
 
+@lru_cache(maxsize=65536)
+def _slots_por_estagio_cache(linhas):
+    """Conta slots de TSD por estagio. Um slot de estagio 1 e so um buraco com espaco
+    aberto em cima (comum por acidente); estagio 2/3 ja tem o vao de tres colunas, ou seja,
+    e um setup de verdade e a casa do talo e intencional."""
+    por_estagio = [0, 0, 0, 0]
+    for r1 in range(1, LINHAS):
+        e = ~linhas[r1] & CHEIA
+        if not e or e & (e - 1):
+            continue
+        x = e.bit_length() - 2
+        if x < 0 or x > 7:
+            continue
+        m = 7 << x
+        cima = linhas[r1 - 1]
+        if cima & m:
+            continue
+        est = 1
+        if (~cima & CHEIA) == m:
+            est = 2
+            if r1 >= 2:
+                acima = linhas[r1 - 2]
+                a, b, meio = (acima >> x) & 1, (acima >> (x + 2)) & 1, (acima >> (x + 1)) & 1
+                if a ^ b and not meio:
+                    est = 3
+        por_estagio[est] += 1
+    return tuple(por_estagio)
+
+
+def _slots_por_estagio(linhas):
+    return _slots_por_estagio_cache(linhas if isinstance(linhas, tuple) else tuple(linhas))
+
+
 def _slots_detalhes(linhas):
     """Versao cacheada (o mesmo tabuleiro e reavaliado muitas vezes na busca)."""
     return _slots_detalhes_cache(linhas if isinstance(linhas, tuple) else tuple(linhas))
-
-
-def _slots(linhas):
-    return _slots_detalhes(linhas)[:2]
 
 
 def _tem_tspin_clear_geometrico(linhas):
@@ -789,18 +779,22 @@ def _buracos(linhas):
     return _buracos_cache(linhas if isinstance(linhas, tuple) else tuple(linhas))
 
 
-@lru_cache(maxsize=65536)
-def _slots_prontos(linhas):
-    """Quantos slots de TSD com overhang (estagio 3) existem: o overhang cobre uma casa vazia
-    de proposito e nao deve ser tratado como buraco."""
-    return _slots_detalhes(linhas)[0] if USAR_SPINS else 0
+def _slots_planejados(linhas):
+    """Slots de TSD com o vao de tres colunas ja formado (estagios 2 e 3). A casa do talo
+    e intencional e nao conta como buraco; um simples buraco aberto (estagio 1) conta."""
+    if not USAR_SPINS:
+        return 0
+    por_estagio = _slots_por_estagio(linhas)
+    return por_estagio[2] + por_estagio[3]
 
 
 def _buracos_efetivos(linhas):
-    """Buracos reais: desconta a casa coberta pelo overhang de cada slot de TSD pronto."""
+    """Buracos reais: desconta a casa intencional de cada slot de TSD ja formado.
+    Sem isso, comecar um slot custava 32 pontos por buraco e o bot nunca chegava ao T-spin."""
     total = _buracos(linhas)
     if total:
-        total = max(0, total - _slots_prontos(linhas if isinstance(linhas, tuple) else tuple(linhas)))
+        total = max(0, total - _slots_planejados(
+            linhas if isinstance(linhas, tuple) else tuple(linhas)))
     return total
 
 
@@ -851,25 +845,21 @@ def _filtrar_pocos_novos(linhas, colocacoes):
     return limpas or colocacoes
 
 
+def _filtrar_tspin_obrigatorio(colocacoes, letra):
+    """Com um T-spin full de duas ou tres linhas alcancavel, ele e a jogada.
+    E o comportamento de quem faz T-spin toda bag: o T nunca e gasto deitado
+    quando existe o encaixe do spin."""
+    if letra != "T" or not USAR_SPINS:
+        return colocacoes
+    spins = [c for c in colocacoes if c[7] == "full" and c[9] >= 2]
+    return spins or colocacoes
+
+
 def _filtrar_buracos_novos(linhas, colocacoes):
     """Evita criar buracos quando outra colocacao do passo nao os cria."""
     buracos_atuais = _buracos_efetivos(linhas)
     limpas = [c for c in colocacoes if _buracos_efetivos(c[1]) <= buracos_atuais]
     return limpas or colocacoes
-
-
-def _profundidade_well(alturas):
-    """Profundidade maxima de 4-wide com paredes dos dois lados."""
-    melhor = 0
-    largura = 4
-    for inicio in range(1, COLUNAS - largura):
-        canal = alturas[inicio:inicio + largura]
-        externas = alturas[:inicio] + alturas[inicio + largura:]
-        parede = min(externas)
-        abertura = parede - max(canal)
-        if parede >= 2 and abertura >= 1:
-            melhor = max(melhor, min(parede, abertura))
-    return melhor
 
 
 def _penalidade_pocos_largos(alturas):
@@ -889,22 +879,6 @@ def _penalidade_dependencia(linhas):
     return -W["dependencia"] * (7 - encaixam) - 4.0 * max(0, 4 - encaixam) ** 2
 
 
-def _bonus_poco_um(alturas, tem_i=False):
-    """Favorece um poço central de I para Tetris (desligado: dependencia de I)."""
-    if not USAR_POCOS_I:
-        return 0.0
-    melhor = 0.0
-    for coluna in range(2, COLUNAS - 2):
-        parede = min(alturas[coluna - 1], alturas[coluna + 1])
-        profundidade = parede - alturas[coluna]
-        if parede >= 2 and profundidade >= 2:
-            nota = W["one_wide"] * min(profundidade, 4) * (1.0 if tem_i else FATOR_SEM_I)
-            if tem_i and profundidade >= 4:
-                nota += 4.0
-            melhor = max(melhor, nota)
-    return melhor
-
-
 def _penalidade_buracos_estreitos(linhas):
     """Buraco cercado dos dois lados numa coluna de 1 de largura: so peca vertical (I)
     ou um T-spin fecha. E a dependencia que mata a partida — cobra caro."""
@@ -920,13 +894,6 @@ def _penalidade_buracos_estreitos(linhas):
                 total += bin(estreitos & coberto).count("1")
         coberto |= mascara
     return CUSTO_BURACO_ESTREITO * total
-
-
-def _penalidade_desnivel(alturas):
-    """Construcao nivelada: acima de DESNIVEL_OK linhas de diferenca entre a coluna mais
-    alta e a mais baixa, cada linha extra custa — evita coluna funda para "construir junto"."""
-    desnivel = max(alturas) - min(alturas)
-    return W["nivel"] * max(0, desnivel - DESNIVEL_OK)
 
 
 def _profundidades_poco_um(alturas):
@@ -962,124 +929,13 @@ def _penalidade_pocos_um(alturas):
     return total
 
 
-def _perfil_4wide(linhas, alturas, inicio):
-    """Mede canal, suporte e camada com tres residuais do padrao 4-wide."""
-    if not USAR_POCOS_I:
-        return min(ALTURA_MIN_COMBO_WELL, max(0, max(alturas[:inicio] + alturas[inicio + 4:])
-                                             - max(alturas[inicio:inicio + 4]))), 0, 0.0
-    canal = 15 << inicio
-    laterais = CHEIA ^ canal
-    externos = alturas[:inicio] + alturas[inicio + 4:]
-    parede = min(externos)
-    abertura = parede - max(alturas[inicio:inicio + 4])
-    profundidade_geometrica = min(ALTURA_MIN_COMBO_WELL, max(0, parede), max(0, abertura))
-
-    suporte = cadeia = 0
-    for linha in reversed(linhas):
-        if linha & laterais != laterais:
-            break
-        suporte += 1
-        residuais = POP[linha & canal]
-        if residuais == 3 and cadeia == suporte - 1:
-            cadeia += 1
-        elif cadeia < suporte:
-            cadeia = -1
-    if cadeia < 0:
-        cadeia = 0
-    profundidade = min(ALTURA_MIN_COMBO_WELL, max(profundidade_geometrica, suporte))
-    if not cadeia:
-        # canal vazio: vale muito pouco (nao inicia um 4-wide), so para nao sumir de todo
-        return profundidade, 0, 0.5 * profundidade
-    nota = (W["four_wide"] * min(profundidade, cadeia)
-            + W["four_residual"] * min(cadeia, ALTURA_MIN_COMBO_WELL))
-    centro = 2.0 * max(0, 2 - abs(inicio - 3))
-    return profundidade, cadeia, nota + centro
-
-
-def _4wide_lanes(linhas, alturas, combo=0, cadeia_minima=1):
-    """Devolve canais residuais; para iniciar, exige dez camadas e base de tres residuais."""
-    if not USAR_COMBOS or not USAR_POCOS_I:
-        return []
-    if combo == 0 and max(alturas) > ALTURA_MAX_4W_SETUP:
-        return []
-    minimo = max(cadeia_minima, MIN_4W_BASE) if combo == 0 else cadeia_minima
-    lanes = []
-    for inicio in range(1, COLUNAS - 4):
-        profundidade, cadeia, _ = _perfil_4wide(linhas, alturas, inicio)
-        if cadeia >= minimo and (combo > 0 or profundidade >= ALTURA_MIN_COMBO_WELL):
-            lanes.append(inicio)
-    return lanes
-
-
-def _completa_residual_4wide(linhas, celulas, inicio):
-    canal = 15 << inicio
-    laterais = CHEIA ^ canal
-    colocados = {}
-    for r, c in celulas:
-        colocados[r] = colocados.get(r, 0) | (1 << c)
-    for r, mascara in colocados.items():
-        if not 0 <= r < LINHAS:
-            continue
-        antes = linhas[r]
-        if (antes & laterais) == laterais and POP[antes & canal] == 3:
-            if (antes | mascara) == CHEIA:
-                return True
-    return False
-
-
-def _limpa_residual_4wide(linhas, colocacao, inicio):
-    """Se a colocacao completa uma linha apoiada por seis blocos e tres residuais."""
-    return bool(colocacao[9] and colocacao[6]
-                and _completa_residual_4wide(linhas, colocacao[6], inicio))
-
-
-def _tem_proximo_clear_4wide(linhas, letra, cache, cadeia_minima=1):
-    """Verifica se a proxima peca estende o mesmo 4-wide com cadeia residual suficiente."""
-    chave = ("4w_next", letra, cadeia_minima, tuple(linhas))
-    if chave in cache:
-        return cache[chave]
-    alturas = _altura_colunas(linhas)
-    lanes = _4wide_lanes(linhas, alturas, combo=1, cadeia_minima=cadeia_minima)
-    resultado = False
-    if lanes:
-        for _, _, y, mascaras, celulas, _, _ in _get_colocacoes(linhas, letra):
-            depois, n = _aplicar(linhas, y, mascaras)
-            if n and any(_completa_residual_4wide(linhas, celulas, lane) for lane in lanes):
-                resultado = True
-                break
-    cache[chave] = resultado
-    return resultado
-
-
-def _bonus_pocos_combo(alturas, linhas=None):
-    """Pontua o potencial de 4-wide; só considera pronto com dez camadas residuais."""
-    if not USAR_COMBOS or not USAR_POCOS_I:
-        return 0.0, False
-    melhor = 0.0
-    profundidade_well = _profundidade_well(alturas)
-    quatro_pronto = False
-    if linhas is None:   # sem tabuleiro nao da para exigir base: so a geometria do canal
-        for largura, peso in ((4, W["four_wide"]),):
-            for inicio in range(1, COLUNAS - largura):
-                canal = alturas[inicio:inicio + largura]
-                externas = alturas[:inicio] + alturas[inicio + largura:]
-                parede = min(externas)
-                abertura = parede - max(canal)
-                if parede < 2 or abertura < 1:
-                    continue
-                limite = ALTURA_MIN_COMBO_WELL if largura == 4 else 4
-                estagio = min(limite, parede, abertura)
-                melhor = max(melhor, peso * estagio)
-
-    if linhas is not None:
-        quatro_pronto = False
-        for inicio in range(1, COLUNAS - 4):
-            profundidade, cadeia, nota = _perfil_4wide(linhas, alturas, inicio)
-            melhor = max(melhor, nota)
-            if (profundidade >= ALTURA_MIN_COMBO_WELL
-                    and cadeia >= MIN_4W_COMBO - 1):
-                quatro_pronto = True
-    return melhor, quatro_pronto
+def _fator_headroom(altura_maxima):
+    """Quanto de um setup ainda vale: cheio com a pilha em ALTURA_ALVO, zero em ALTURA_MANOBRA.
+    Mantem a construcao de T-spin subordinada ao empilhamento baixo, como no jogo real."""
+    if altura_maxima <= ALTURA_ALVO:
+        return 1.0
+    return max(0.0, min(1.0, (ALTURA_MANOBRA - altura_maxima)
+                        / float(ALTURA_MANOBRA - ALTURA_ALVO)))
 
 
 def _avaliar_impl(linhas, b2b, combo, ctx, calcular_dependencia,
@@ -1109,13 +965,13 @@ def _avaliar_impl(linhas, b2b, combo, ctx, calcular_dependencia,
                 novos ^= b
             cobertas |= v
 
-    # poço na borda (para quad): coluna 0 ou 9 pelo menos 2 mais baixa que a vizinha
-    poco, prof = -1, 0
+    # poco na borda (para quad): coluna 0 ou 9 pelo menos 2 mais baixa que a vizinha
+    poco = -1
     d9, d0 = alt[8] - alt[9], alt[1] - alt[0]
     if d9 >= 2 and d9 >= d0:
-        poco, prof = 9, d9
+        poco = 9
     elif d0 >= 2:
-        poco, prof = 0, d0
+        poco = 0
     rug = 0
     dips = 0
     for i in range(COLUNAS - 1):
@@ -1130,20 +986,12 @@ def _avaliar_impl(linhas, b2b, combo, ctx, calcular_dependencia,
         if alt[i - 1] - a >= 2 and alt[i + 1] - a >= 2:
             dips += 1
 
-    tem_T, tem_I = ctx[0], ctx[1]
+    tem_T = ctx[0]
     especial = 0.0
-    if poco >= 0:
-        alvo = CHEIA ^ (1 << poco)
-        run = 0
-        for r in range(LINHAS - 1, -1, -1):
-            if linhas[r] == alvo:
-                run += 1
-            else:
-                break
-        especial = (W["quad_run"] * min(run, 4) + W["poco"] * min(prof, 4)) * (1.0 if tem_I else 0.5)
     prontos, est, setups = _slots_detalhes(linhas)
-    if prontos and USAR_SPINS:
-        buracos = max(0, buracos - prontos)
+    planejados = _slots_planejados(linhas)
+    if planejados:
+        buracos = max(0, buracos - min(buracos, planejados))
     if est:
         fator_t = 1.0 if tem_T else FATOR_SEM_T
         tsd = W["slot"] * ESTAGIO[est] * fator_t
@@ -1151,32 +999,17 @@ def _avaliar_impl(linhas, b2b, combo, ctx, calcular_dependencia,
         if tsd > especial:
             especial = tsd
 
-    if MODO == "ataque":
-        bonus_poco_um = _bonus_poco_um(alt, tem_I)
-        if calcular_estrategia:
-            bonus_poco, _ = _bonus_pocos_combo(alt, linhas)
-            if not tem_I:
-                bonus_poco *= FATOR_SEM_I
-            especial = max(especial, bonus_poco, bonus_poco_um)
-        else:
-            especial = max(especial, bonus_poco_um)
-
-    if maxh >= ALTURA_SEGURA:
-        # pilha alta: o setup perde forca e some perto do topo, onde limpar e baixar manda
-        especial *= max(0.0, (ALTURA_PERIGO - maxh) / (ALTURA_PERIGO - ALTURA_SEGURA))
+    # Setup so compensa com pilha baixa: um slot em pilha alta nao paga o risco de topout.
+    especial *= _fator_headroom(maxh)
 
     nota = (especial - W["soma"] * soma - W["buraco"] * buracos - W["trans"] * trans
             - W["rug"] * rug - W["dip"] * dips)
     if len(ctx) > 2 and ctx[2] and openers.ativo(linhas):
         nota += PESO_MOLDE * openers.aderencia_ativa(linhas)
-    if maxh > ALTURA_SEGURA:
-        nota -= W["altura"] * (maxh - ALTURA_SEGURA) ** 1.5
-    if maxh >= ALTURA_PERIGO:
-        nota -= CUSTO_PERIGO * (maxh - ALTURA_PERIGO) ** 2
-    elif b2b:
-        nota += W["b2b"] * (b2b if b2b < 8 else 8)
-    if USAR_COMBOS and combo and maxh >= ALTURA_SEGURA - 1:
-        nota += W["combo"] * (combo if combo < 5 else 5)
+    if maxh > ALTURA_ALVO:
+        nota -= W["altura"] * (maxh - ALTURA_ALVO) ** 1.5
+    if b2b:
+        nota += W["b2b"] * (b2b if b2b < 8 else 8) * _fator_headroom(maxh)
     nota -= W["coberto"] * max(0, _sobreposicoes(linhas) - (prontos if USAR_SPINS else 0))
     if calcular_dependencia:
         nota += _penalidade_dependencia(linhas)
@@ -1204,12 +1037,6 @@ def _altura_max(linhas):
     """Altura da coluna mais alta (0 = tabuleiro vazio)."""
     topo = next((r for r, mascara in enumerate(linhas) if mascara), LINHAS)
     return LINHAS - topo
-
-
-def _perigo_lixo(linhas, linhas_lixo=0):
-    """Pressao de lixo em uma pilha alta e diferente de altura construida pelo jogador."""
-    altura = _altura_max(linhas)
-    return linhas_lixo >= 3 and altura >= ALTURA_SEGURA - 2
 
 
 def _custo_simples(letra, k, col):
@@ -1316,12 +1143,16 @@ def _tem_perfect_clear_no_proximo(linhas, letra, cache):
 
 
 def _bonus_tspin_setup_estagio(linhas, pecas_visiveis):
-    if not USAR_SPINS or "T" not in pecas_visiveis:
+    """Progresso do slot de TSD. Com o T a vista vale cheio; sem ele, vale descontado
+    (a bag sempre traz um T, e o slot precisa estar montado quando ele chegar)."""
+    if not USAR_SPINS:
         return 0.0
     _, estagio, setups = _slots_detalhes(linhas)
-    if estagio in BONUS_TSPIN_SETUP_STAGE:
-        return BONUS_TSPIN_SETUP_STAGE[estagio] * min(setups, 2)
-    return 0.0
+    if estagio not in BONUS_TSPIN_SETUP_STAGE:
+        return 0.0
+    fator = 1.0 if "T" in pecas_visiveis else FATOR_SEM_T
+    return (BONUS_TSPIN_SETUP_STAGE[estagio] * min(setups, 2) * fator
+            * _fator_headroom(_altura_max(linhas)))
 
 
 def _bonus_tspin_clear(linhas, pecas_visiveis, b2b, combo, cache):
@@ -1364,15 +1195,6 @@ def _bonus_tspin_clear(linhas, pecas_visiveis, b2b, combo, cache):
     return melhor
 
 
-def _bonus_tspin_setup(linhas, pecas_visiveis, b2b, combo, cache):
-    """Combina progresso de slot e qualquer T-spin clear full alcancavel com T visivel."""
-    chave = ("tspin_setup", tuple(linhas), b2b, combo, MODO, tuple(pecas_visiveis))
-    if chave not in cache:
-        cache[chave] = (_bonus_tspin_setup_estagio(linhas, pecas_visiveis)
-                        + _bonus_tspin_clear(linhas, pecas_visiveis, b2b, combo, cache))
-    return cache[chave]
-
-
 def _busca(linhas, b2b, combo, pecas, ctx, cache, larguras=None, peca_final=None,
            abertura=False, reservas=()):
     """Beam search com disponibilidade futura de T/I recalculada apos cada colocacao."""
@@ -1384,8 +1206,7 @@ def _busca(linhas, b2b, combo, pecas, ctx, cache, larguras=None, peca_final=None
         if peca_final:
             futuras.append(peca_final)
         disponiveis = futuras + list(reservas)
-        return ("T" in disponiveis, "I" in disponiveis, len(ctx) > 2 and ctx[2],
-                ctx[3] if len(ctx) > 3 else 0)
+        return ("T" in disponiveis, "I" in disponiveis, len(ctx) > 2 and ctx[2])
 
     def avaliar(board, b2, c2, ctx_futuro, completa=False):
         chave = (tuple(board), b2, c2, ctx_futuro, MODO, completa)
@@ -1401,7 +1222,7 @@ def _busca(linhas, b2b, combo, pecas, ctx, cache, larguras=None, peca_final=None
         """Desincentiva usar o T fora de T-spin quando ha slot de TSD pronto/em construcao."""
         if letra != "T" or spin == "full" or not USAR_SPINS:
             return 0.0
-        if _altura_max(linhas_ref) >= ALTURA_B2B:
+        if _altura_max(linhas_ref) >= ALTURA_PERIGO:
             return 0.0
         _, estagio, _ = _slots_detalhes(linhas_ref)
         if estagio >= 2:
@@ -1435,54 +1256,32 @@ def _busca(linhas, b2b, combo, pecas, ctx, cache, larguras=None, peca_final=None
         return estados
 
     molde = len(ctx) > 2 and ctx[2]
-    linhas_lixo = ctx[3] if len(ctx) > 3 else 0
-    perigo_lixo = _perigo_lixo(linhas, linhas_lixo)
-    urgente = _altura_max(linhas) >= ALTURA_SEGURA or perigo_lixo
+    # Sem modo de emergencia: empilhar baixo e limpar acima de ALTURA_DOWNSTACK e o
+    # comportamento normal do bot, nao uma reacao a perigo.
+    urgente = _altura_max(linhas) >= ALTURA_DOWNSTACK
     raiz = _expandir(linhas, b2b, combo, pecas[0], cache, True)
     if not raiz:
         return None
     raiz = _filtrar_buracos_novos(linhas, raiz)
     raiz = _filtrar_pocos_novos(linhas, raiz)
-    forcar_combo = _combo_forcado(combo, linhas)
-    if forcar_combo and any(c[9] for c in raiz):
-        raiz = [c for c in raiz if c[9]]
-    raiz = _filtrar_quebra_b2b(raiz, b2b, linhas, perigo_lixo)
-    raiz = _filtrar_clear_fraco(raiz, linhas, b2b, perigo_lixo)
-    raiz = _filtrar_emergencia_lixo(raiz, perigo_lixo)
+    if not urgente:   # com a pilha baixa ainda vale proteger B2B de clears secos
+        raiz = _filtrar_quebra_b2b(raiz, b2b, linhas)
+        raiz = _filtrar_clear_fraco(raiz, linhas, b2b)
+    raiz = _filtrar_tspin_obrigatorio(raiz, pecas[0])
     alturas_iniciais = _altura_colunas(linhas)
-    profundidade_well = _profundidade_well(alturas_iniciais)
-    _, poco_quatro = _bonus_pocos_combo(alturas_iniciais, linhas)
-    lanes_4w = _4wide_lanes(linhas, alturas_iniciais, combo)
-    if lanes_4w:
-        clears_4w = [c for c in raiz
-                     if any(_limpa_residual_4wide(linhas, c, lane) for lane in lanes_4w)
-                     and (combo > 0 or len(pecas) < 2
-                          or _tem_proximo_clear_4wide(
-                              c[1], pecas[1], cache, MIN_4W_COMBO - 1))]
-        if clears_4w:
-            simples = [c for c in clears_4w if c[9] == 1]
-            if simples:
-                raiz = simples
-            else:
-                menor_clear = min(c[9] for c in clears_4w)
-                raiz = [c for c in clears_4w if c[9] == menor_clear]
     frente = []
     peca_depois = pecas[1] if len(pecas) > 1 else peca_final
     visiveis_depois = tuple(dict.fromkeys(
         ([peca_depois] if peca_depois else []) + list(reservas)))
     for i, c in enumerate(raiz):
-        bonus_4w = (BONUS_4W_CLEAR if any(_limpa_residual_4wide(linhas, c, lane)
-                                                for lane in lanes_4w) else 0.0)
         s = (PESO_VALOR * _valor_planejamento(c[9], c[7], c[0])
              + _bonus_tspin(c[7], c[9])
              + (BONUS_TETRIS if c[9] == 4 and not c[7] else 0.0)
-             + (BONUS_SOBREVIVENCIA * c[9] if urgente else 0.0)
-             - _custo_clear_pequeno(c[9], c[7], c[0], c[1], combo, poco_quatro,
-                                    profundidade_well, perigo_lixo)
+             - _custo_clear_pequeno(c[9], c[7], c[0], c[1])
              - _custo_quebra_b2b(c[9], c[7], b2b, max(alturas_iniciais),
-                                not any(c[1]), perigo_lixo)
+                                not any(c[1]))
              - CUSTO_TECLA * c[10]
-             + _ajuste_i(pecas[0], c, linhas) + bonus_4w
+             + _ajuste_i(pecas[0], c, linhas)
              + (_bonus_clear_abertura(c[7], c[9]) if tsd_abertura else 0.0)
              - custo_gastar_t(pecas[0], c[7], c[9], linhas)
              - (CUSTO_CLEAR_MOLDE if molde and c[9] and c[7] != "full" and c[0] <= 0
@@ -1510,28 +1309,23 @@ def _busca(linhas, b2b, combo, pecas, ctx, cache, larguras=None, peca_final=None
             ([peca_depois] if peca_depois else []) + list(reservas)))
         ctx_futuro = contexto_depois(d + 1)
         for _, s, i, board, b2, c2, ja_fez_tsd in frente:
-            perigo_lixo_board = _perigo_lixo(board, linhas_lixo)
-            urgente_board = _altura_max(board) >= ALTURA_SEGURA or perigo_lixo_board
+            urgente_board = _altura_max(board) >= ALTURA_DOWNSTACK
             molde_board = molde and openers.ativo(board)
             alturas_board = _altura_colunas(board)
-            profundidade_well = _profundidade_well(alturas_board)
-            _, poco_quatro = _bonus_pocos_combo(alturas_board, board)
             continuacoes = _expandir(board, b2, c2, pecas[d], cache, False,
                                      aproximado_t=d >= 2)
             continuacoes = _filtrar_buracos_novos(board, continuacoes)
-            continuacoes = _filtrar_clear_fraco(
-                continuacoes, board, b2, perigo_lixo_board)
-            continuacoes = _filtrar_emergencia_lixo(continuacoes, perigo_lixo_board)
-            for c in _filtrar_quebra_b2b(
-                    continuacoes, b2, board, perigo_lixo_board):
+            continuacoes = _filtrar_tspin_obrigatorio(continuacoes, pecas[d])
+            if not urgente_board:
+                continuacoes = _filtrar_clear_fraco(continuacoes, board, b2)
+                continuacoes = _filtrar_quebra_b2b(continuacoes, b2, board)
+            for c in continuacoes:
                 s2 = (s + PESO_VALOR * _valor_planejamento(c[9], c[7], c[0])
                       + _bonus_tspin(c[7], c[9])
                       + (BONUS_TETRIS if c[9] == 4 and not c[7] else 0.0)
-                      + (BONUS_SOBREVIVENCIA * c[9] if urgente_board else 0.0)
-                      - _custo_clear_pequeno(c[9], c[7], c[0], c[1], c2, poco_quatro,
-                                             profundidade_well, perigo_lixo_board)
+                      - _custo_clear_pequeno(c[9], c[7], c[0], c[1])
                       - _custo_quebra_b2b(c[9], c[7], b2, max(alturas_board),
-                                         not any(c[1]), perigo_lixo_board)
+                                         not any(c[1]))
                       + _ajuste_i(pecas[d], c, board)
                       + (_bonus_clear_abertura(c[7], c[9]) if tsd_abertura else 0.0)
                       + _bonus_dt_cannon(tsd_abertura, ja_fez_tsd, pecas[d], c[7], c[9])
@@ -1577,22 +1371,6 @@ def _busca(linhas, b2b, combo, pecas, ctx, cache, larguras=None, peca_final=None
 
 
 # ---------- decisao ----------
-def _teclas_simples(letra, k, col, cels):
-    t = []
-    if k:
-        t.append(("toque", {1: "cw", 2: "180", 3: "ccw"}[k]))
-    d = col - COL_SPAWN[letra]
-    if d:
-        nome = "dir" if d > 0 else "esq"
-        cols = [c for _, c in cels]
-        na_parede = (d < 0 and min(cols) == 0) or (d > 0 and max(cols) == COLUNAS - 1)
-        if na_parede and abs(d) >= DAS_MIN:
-            t.append(("das", nome))
-        else:
-            t += [("toque", nome)] * abs(d)
-    return t
-
-
 def _jogada_reserva(linhas, letra, b2b=0, combo=0, usar_hold=False):
     """Ultimo recurso quando a busca nao devolve jogada: pega qualquer colocacao alcancavel,
     preferindo a que deixa a pilha mais baixa e com menos buracos. Sem isto o bot parava de
@@ -1633,7 +1411,11 @@ def jogada_para(linhas, letra, celulas, usar_hold=False, b2b=0, combo=0):
 
 def decidir(pilha, mao, hold, proximas, permitir_hold=True, b2b=0, combo=0,
             bag_seguinte=None, abertura=None, linhas_lixo=0, _rapido=True):
-    """Escolhe jogada; a janela de opener e informada pelo chamador."""
+    """Escolhe jogada; a janela de opener e informada pelo chamador.
+
+    `linhas_lixo` e aceito para o laco ao vivo, mas nao entra na nota: a politica e a mesma
+    com ou sem lixo, e quem limita a altura e o custo de altura (ver ALTURA_DOWNSTACK).
+    """
     global RAPIDO
     if not _rapido:   # repeticao sem a busca rapida (quando a rota fisica da escolhida falha)
         antigo, RAPIDO = RAPIDO, False
@@ -1652,7 +1434,7 @@ def decidir(pilha, mao, hold, proximas, permitir_hold=True, b2b=0, combo=0,
     fase_abertura = (not any(linhas) if abertura is None else bool(abertura))
     molde = (OPENERS and fase_abertura and "T" in visiveis
              and openers.ativo(linhas))
-    ctx = ("T" in visiveis, "I" in visiveis, molde, max(0, int(linhas_lixo)))
+    ctx = ("T" in visiveis, "I" in visiveis, molde)
 
     cache = {}
     opcoes = []
@@ -1709,30 +1491,6 @@ def decidir(pilha, mao, hold, proximas, permitir_hold=True, b2b=0, combo=0,
         if reserva is None and permitir_hold and hold:
             reserva = _jogada_reserva(linhas, hold, b2b, combo, usar_hold=True)
         return reserva
-    alturas = _altura_colunas(linhas)
-    lanes_4w = _4wide_lanes(linhas, alturas, combo)
-    if lanes_4w:
-        clears_4w = []
-        for o in opcoes:
-            if not any(_limpa_residual_4wide(linhas, o[3], lane) for lane in lanes_4w):
-                continue
-            prox_peca = prox[1] if o[1] and hold is None and len(prox) > 1 else (
-                prox[0] if prox else None)
-            if (combo > 0 or prox_peca is None
-                    or _tem_proximo_clear_4wide(
-                        o[3][1], prox_peca, cache, MIN_4W_COMBO - 1)):
-                clears_4w.append(o)
-        if clears_4w:
-            if combo == 0:
-                singles_4w = [o for o in clears_4w if o[3][9] == 1]
-                if singles_4w:
-                    clears_4w = singles_4w
-                else:
-                    menor_clear = min(o[3][9] for o in clears_4w)
-                    clears_4w = [o for o in clears_4w if o[3][9] == menor_clear]
-            opcoes = clears_4w
-    if _combo_forcado(combo, linhas) and any(o[3][9] for o in opcoes):
-        opcoes = [o for o in opcoes if o[3][9]]
     _, usar, letra, c = max(opcoes, key=lambda o: o[0])
     val, depois, b2n, c2n, k, col, cels, sp, acoes, n, _ = c
     if acoes is None:   # jogada escolhida na busca rapida: confere a rota fisica (BFS) so dela
@@ -1833,10 +1591,9 @@ def simular(n_pecas=500, seed=0, decidir_fn=None, verificar=False, pressao=0.0):
                holes_created=0, max_holes=0, opener_attempts=0,
                opener_abandoned=0, perfect_clears=0, teclas=0, garbage=0, vivo=True)
     est["garbage_rows_peak"] = 0
-    est["garbage_emergency_decisions"] = 0
-    est["garbage_emergency_dry_clears"] = 0
     pendente, buraco = 0.0, rnd.randrange(COLUNAS)
     buracos_total = 0
+    alturas_jogo = []
     inicio = time.perf_counter()
     pecas_abertura = 0
     opener_tentado = False
@@ -1859,10 +1616,7 @@ def simular(n_pecas=500, seed=0, decidir_fn=None, verificar=False, pressao=0.0):
         hold_vazio = hold is None
         abertura = pecas_abertura < JANELA_ABERTURA
         linhas_lixo = _contar_linhas_lixo(celulas_lixo)
-        perigo_lixo = _perigo_lixo(para_linhas(pilha), linhas_lixo)
         est["garbage_rows_peak"] = max(est["garbage_rows_peak"], linhas_lixo)
-        if perigo_lixo:
-            est["garbage_emergency_decisions"] += 1
         if (OPENERS and abertura and not opener_tentado
                 and "T" in (mao, hold, *fila[:5])
                 and openers.ativo(para_linhas(pilha))):
@@ -1881,8 +1635,6 @@ def simular(n_pecas=500, seed=0, decidir_fn=None, verificar=False, pressao=0.0):
         if j is None:
             est["vivo"] = False
             break
-        if perigo_lixo and 0 < j.limpas < 4 and not j.spin and j.valor <= 0:
-            est["garbage_emergency_dry_clears"] += 1
         if j.usar_hold:
             if hold is None:
                 hold, mao = mao, fila.pop(0)
@@ -1906,6 +1658,7 @@ def simular(n_pecas=500, seed=0, decidir_fn=None, verificar=False, pressao=0.0):
         pilha, n = _limpar(board_antes_clear)
         altura, buracos = medir_pilha(pilha)
         est["max_height"] = max(est["max_height"], altura)
+        alturas_jogo.append(altura)
         est["holes_created"] += max(0, buracos - buracos_antes)
         est["max_holes"] = max(est["max_holes"], buracos)
         if n and not pilha:
@@ -1987,6 +1740,9 @@ def simular(n_pecas=500, seed=0, decidir_fn=None, verificar=False, pressao=0.0):
     est["apm_equivalente"] = est["valor"] * 60.0 / tempo_medicao
     est["app"] = est["valor"] / pecas_medidas
     est["buracos_medios"] = buracos_total / pecas_medidas
+    est["altura_media"] = (sum(alturas_jogo) / len(alturas_jogo)) if alturas_jogo else 0.0
+    ordenadas = sorted(alturas_jogo)
+    est["altura_p95"] = ordenadas[min(len(ordenadas) - 1, int(0.95 * len(ordenadas)))] if ordenadas else 0
     b2b_eventos = est["b2b_continuations"] + est["b2b_breaks"]
     est["b2b_mantido_pct"] = (
         100.0 * est["b2b_continuations"] / b2b_eventos if b2b_eventos else 0.0)

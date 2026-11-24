@@ -13,6 +13,13 @@ import probability
 import tetrio_projeto as tp
 
 
+def _bonus_setup(rows, visiveis, b2b=0, combo=0, cache=None):
+    """Valor total de setup de T-spin: progresso do slot + clear full alcancavel."""
+    cache = {} if cache is None else cache
+    return (d._bonus_tspin_setup_estagio(rows, visiveis)
+            + d._bonus_tspin_clear(rows, visiveis, b2b, combo, cache))
+
+
 class InitialReadDiagnosticTests(unittest.TestCase):
     def test_failed_initial_queue_read_saves_current_capture(self):
         frame = np.zeros((480, 514, 3), dtype=np.uint8)
@@ -1073,28 +1080,21 @@ class WellTests(unittest.TestCase):
         # com um poco ja na pilha o filtro nao age
         self.assertEqual(2, len(d._filtrar_pocos_novos(um, [colocacao(um), colocacao(dois)])))
 
-    def test_incoming_garbage_is_distinct_from_a_self_built_stack(self):
-        high_rows = [0] * d.LINHAS
-        high_rows[-12:] = [d.CHEIA ^ (1 << 5)] * 12
+    def test_weak_clears_are_filtered_only_while_the_stack_is_low(self):
         safe_rows = [0] * d.LINHAS
         safe_rows[-8:] = [d.CHEIA ^ (1 << 5)] * 8
         weak = (0.0, safe_rows, 0, 0, 0, 3, frozenset(), "", [], 1, 1)
         safe = (0.0, safe_rows, 0, 0, 0, 3, frozenset(), "", [], 0, 1)
-
-        self.assertFalse(d._perigo_lixo(high_rows, 0))
-        self.assertTrue(d._perigo_lixo(high_rows, 4))
-        self.assertTrue(d._perigo_lixo(safe_rows, 4))
         self.assertEqual([safe], d._filtrar_clear_fraco([weak, safe], safe_rows))
-        self.assertEqual([weak, safe], d._filtrar_clear_fraco(
-            [weak, safe], safe_rows, perigo_lixo=True))
-        self.assertEqual([weak], d._filtrar_emergencia_lixo([weak, safe], True))
 
+        low_rows = [0] * d.LINHAS
+        low_rows[-d.ALTURA_ALVO + 1:] = [d.CHEIA] * (d.ALTURA_ALVO - 1)
         with patch.object(d, "MODO", "ataque"):
-            self.assertGreater(d._custo_clear_pequeno(1, "", 0, safe_rows), 0)
-            self.assertEqual(0, d._custo_clear_pequeno(
-                1, "", 0, safe_rows, perigo_lixo=True))
+            self.assertGreater(d._custo_clear_pequeno(1, "", 0, low_rows), 0)
+            # com a pilha em ALTURA_DOWNSTACK limpar deixa de ser desperdicio: baixa a pilha
+            self.assertEqual(0, d._custo_clear_pequeno(1, "", 0, safe_rows))
         self.assertGreater(d._custo_quebra_b2b(1, "", 4, 12), 0)
-        self.assertEqual(0, d._custo_quebra_b2b(1, "", 4, 12, perigo_lixo=True))
+        self.assertEqual(0, d._custo_quebra_b2b(1, "", 4, d.ALTURA_PERIGO))
 
     def test_simulator_counts_only_rows_with_received_garbage(self):
         garbage = {(r, c) for r in range(4) for c in range(d.COLUNAS) if c != 5}
@@ -1252,11 +1252,7 @@ class TransitionTests(unittest.TestCase):
         with patch.object(d, "MODO", "ataque"):
             self.assertGreater(d._custo_clear_pequeno(1, "", 0, board),
                                d._custo_clear_pequeno(2, "", 1, board))
-            custo_sem_combo = d._custo_clear_pequeno(1, "", 0, board)
-            custo_com_combo = d._custo_clear_pequeno(1, "", 0, board, combo=2)
-            self.assertGreater(custo_com_combo, 0.0)
-            self.assertEqual(custo_com_combo, custo_sem_combo)
-            self.assertEqual(0.0, d._custo_clear_pequeno(1, "", 4, board, combo=2))
+            self.assertEqual(0.0, d._custo_clear_pequeno(1, "", 4, board))
             self.assertEqual(0.0, d._custo_clear_pequeno(1, "", 0, [d.CHEIA] * 11 + [0] * 9))
             self.assertEqual(0.0, d._custo_clear_pequeno(2, "full", 1, board))
 
@@ -1345,17 +1341,17 @@ class TransitionTests(unittest.TestCase):
 
         with patch.object(d, "_tem_tspin_clear_geometrico", return_value=True), \
                 patch.object(d, "colocacoes_alcancaveis", return_value=[full_spin]):
-            bonus = d._bonus_tspin_setup(rows, ("T",), 0, 0, {})
+            bonus = _bonus_setup(rows, ("T",), 0, 0, {})
         self.assertGreater(bonus, d.BONUS_TSPIN_SETUP[1])
-        self.assertEqual(0.0, d._bonus_tspin_setup(rows, ("I",), 0, 0, {}))
+        self.assertEqual(0.0, _bonus_setup(rows, ("I",), 0, 0, {}))
 
         with patch.object(d, "_tem_tspin_clear_geometrico", return_value=True), \
                 patch.object(d, "colocacoes_alcancaveis", return_value=[mini_spin]):
-            self.assertEqual(0.0, d._bonus_tspin_setup(rows, ("T",), 0, 0, {}))
+            self.assertEqual(0.0, _bonus_setup(rows, ("T",), 0, 0, {}))
 
         with patch.object(d, "_tem_tspin_clear_geometrico", return_value=False), \
                 patch.object(d, "colocacoes_alcancaveis") as placements:
-            self.assertEqual(0.0, d._bonus_tspin_setup(rows, ("T",), 0, 0, {}))
+            self.assertEqual(0.0, _bonus_setup(rows, ("T",), 0, 0, {}))
         placements.assert_not_called()
 
     def test_tspin_setup_finds_reachable_clear_before_the_tsd_slot_is_complete(self):
@@ -1374,16 +1370,16 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(1, len(quick_placements))
         self.assertEqual("full", quick_placements[0][5])
 
-        bonus = d._bonus_tspin_setup(rows, ("T",), 0, 0, {})
+        bonus = _bonus_setup(rows, ("T",), 0, 0, {})
 
         self.assertGreater(bonus, d.BONUS_TSPIN_SETUP_STAGE[1])
 
     def test_tspin_setup_bonus_scales_with_visible_setup_stage(self):
         rows = [0] * d.LINHAS
         with patch.object(d, "_slots_detalhes", return_value=(0, 1, 1)):
-            stage_one = d._bonus_tspin_setup(rows, ("T",), 0, 0, {})
+            stage_one = _bonus_setup(rows, ("T",), 0, 0, {})
         with patch.object(d, "_slots_detalhes", return_value=(0, 2, 1)):
-            stage_two = d._bonus_tspin_setup(rows, ("T",), 0, 0, {})
+            stage_two = _bonus_setup(rows, ("T",), 0, 0, {})
 
         self.assertEqual(d.BONUS_TSPIN_SETUP_STAGE[1], stage_one)
         self.assertEqual(d.BONUS_TSPIN_SETUP_STAGE[2], stage_two)
@@ -1396,7 +1392,7 @@ class TransitionTests(unittest.TestCase):
         rows[19] = d.CHEIA ^ (1 << 4)
         self.assertEqual(1, d._slots_detalhes(rows)[0])
 
-        bonus = d._bonus_tspin_setup(rows, ("T",), 0, 0, {})
+        bonus = _bonus_setup(rows, ("T",), 0, 0, {})
 
         self.assertGreater(bonus, 0.0)
 
@@ -1416,7 +1412,7 @@ class TransitionTests(unittest.TestCase):
                                 (True, False, False), {}, larguras=(1,),
                                 abertura=False)[0]
 
-        setup_bonus = d._bonus_tspin_setup(rows, ("T",), 0, 0, {})
+        setup_bonus = _bonus_setup(rows, ("T",), 0, 0, {})
 
         self.assertGreater(setup_bonus, 0.0)
         self.assertGreater(score("T"), score("S"))
@@ -1436,7 +1432,7 @@ class TransitionTests(unittest.TestCase):
                                 (True, False, False), {}, larguras=(1,),
                                 abertura=False)[0]
 
-        setup_bonus = d._bonus_tspin_setup(rows, ("T",), 0, 0, {})
+        setup_bonus = _bonus_setup(rows, ("T",), 0, 0, {})
 
         self.assertGreater(setup_bonus, 0.0)
         self.assertAlmostEqual(setup_bonus, score("T") - score("S"))
@@ -1571,7 +1567,7 @@ class TransitionTests(unittest.TestCase):
         slot[-1] = d.CHEIA ^ (1 << 4)
         slot[-2] = d.CHEIA ^ (7 << 3)
         self.assertEqual(1, d._slots_detalhes(slot)[2])
-        self.assertEqual((0, 2), d._slots(slot))
+        self.assertEqual((0, 2), d._slots_detalhes(slot)[:2])
         self.assertFalse(hasattr(d, "BONUS_HOLD_T"))   # nao premia mais segurar o T
 
     def test_accidental_buried_hole_is_not_forgiven_by_an_unrelated_tsd_slot(self):
@@ -1704,78 +1700,15 @@ class TransitionTests(unittest.TestCase):
             self.assertLess(base, vazio)
             self.assertLess(quatro, vazio)
             self.assertLess(tres, vazio)
-            self.assertEqual((0.0, False),
-                             d._bonus_pocos_combo(d._altura_colunas(com_base), com_base))
-            self.assertEqual([], d._4wide_lanes(com_base, d._altura_colunas(com_base), combo=1,
-                                                cadeia_minima=2))
 
-            with patch.object(d, "MODO", "ataque"):
-                shallow_well = [0] * d.LINHAS
-                for row in range(d.LINHAS - 6, d.LINHAS):
-                    shallow_well[row] = d.CHEIA ^ four_open
-                self.assertGreater(d._custo_clear_pequeno(
-                    1, "", 0, shallow_well, profundidade_well=6),
-                    d._custo_clear_pequeno(1, "", 0, shallow_well))
-                deep_well = [0] * d.LINHAS
-                for row in range(d.LINHAS - 10, d.LINHAS):
-                    deep_well[row] = d.CHEIA ^ four_open
-                narrow = [0] * d.LINHAS
-                for row in range(d.LINHAS - 10, d.LINHAS):
-                    narrow[row] = d.CHEIA ^ (1 << 4)
-                self.assertGreater(d._penalidade_pocos_um(d._altura_colunas(narrow)), 0.0)
+            narrow = [0] * d.LINHAS
+            for row in range(d.LINHAS - 10, d.LINHAS):
+                narrow[row] = d.CHEIA ^ (1 << 4)
+            self.assertGreater(d._penalidade_pocos_um(d._altura_colunas(narrow)), 0.0)
         finally:
             d.MODO = modo
 
-    def test_four_wide_combo_requires_ten_rows_and_three_residuals(self):
-        lane = 15 << 3
-        sides = d.CHEIA ^ lane
-        for depth in (6, 8, 10):
-            board = [0] * d.LINHAS
-            for row in range(d.LINHAS - depth, d.LINHAS):
-                board[row] = sides | (lane & ~(1 << 6))
-            score, ready = d._bonus_pocos_combo(d._altura_colunas(board), board)
-            self.assertEqual(0.0, score)     # 4-wide desligado: nao pontua
-            self.assertFalse(ready)
-
-        no_residuals = [0] * d.LINHAS
-        for row in range(d.LINHAS - 10, d.LINHAS):
-            no_residuals[row] = sides
-        self.assertFalse(d._bonus_pocos_combo(d._altura_colunas(no_residuals), no_residuals)[1])
-
-        nine_residuals = [0] * d.LINHAS
-        for row in range(d.LINHAS - 9, d.LINHAS):
-            nine_residuals[row] = sides | (lane & ~(1 << 6))
-        self.assertEqual([], d._4wide_lanes(nine_residuals, d._altura_colunas(nine_residuals), combo=1,
-                                            cadeia_minima=d.MIN_4W_COMBO - 1))
-        eight_residuals = [0] * d.LINHAS
-        for row in range(d.LINHAS - 8, d.LINHAS):
-            eight_residuals[row] = sides | (lane & ~(1 << 6))
-        self.assertNotIn(3, d._4wide_lanes(eight_residuals, d._altura_colunas(eight_residuals), combo=1,
-                                            cadeia_minima=d.MIN_4W_COMBO - 1))
-        self.assertNotIn(3, d._4wide_lanes(eight_residuals, d._altura_colunas(eight_residuals), combo=0))
-
-        high_stack = [0] * d.LINHAS
-        for row in range(d.LINHAS - 10, d.LINHAS):
-            high_stack[row] = sides | (lane & ~(1 << 6))
-        high_stack[-11] |= 1
-        high_stack[-12] |= 1
-        high_heights = d._altura_colunas(high_stack)
-        self.assertNotIn(3, d._4wide_lanes(high_stack, high_heights, combo=0))
-        self.assertEqual([], d._4wide_lanes(high_stack, high_heights, combo=1))
-
-    def test_four_wide_residual_clear_is_detected_from_its_board_row(self):
-        lane = 15 << 3
-        sides = d.CHEIA ^ lane
-        rows = [0] * d.LINHAS
-        rows[-1] = sides | (lane & ~(1 << 6))
-        single = (0.0, rows, 0, 0, 0, 3,
-                  frozenset({(19, 6), (15, 0), (15, 1), (15, 2)}), "", [], 1, 1)
-        tetris = (0.0, rows, 0, 0, 0, 3,
-                  frozenset((r, 6) for r in range(16, 20)), "", [], 4, 1)
-        self.assertTrue(d._limpa_residual_4wide(rows, single, 3))
-        self.assertTrue(d._limpa_residual_4wide(rows, tetris, 3))
-
-    def test_four_wide_filter_no_longer_forces_a_single_clear(self):
+    def test_decision_uses_the_best_search_result_instead_of_a_forced_clear(self):
         lane = 15 << 3
         sides = d.CHEIA ^ lane
         rows = [0] * d.LINHAS
@@ -1788,28 +1721,9 @@ class TransitionTests(unittest.TestCase):
                   frozenset({(19, 6), (10, 0), (10, 1), (10, 2)}), "", [], 1, 1)
         tetris = (0.0, board_after, 0, 0, 0, 3,
                   frozenset((r, 6) for r in range(16, 20)), "", [], 4, 1)
-        with patch.object(d, "_busca", side_effect=[(10.0, tetris), (0.0, single)]), \
-             patch.object(d, "_tem_proximo_clear_4wide", return_value=True):
+        with patch.object(d, "_busca", side_effect=[(10.0, tetris), (0.0, single)]):
             move = d.decidir(pile, "T", "I", ["J"], combo=0, abertura=False)
-        # sem o filtro de 4-wide vale a melhor busca (o tetris), nao um clear forcado
-        self.assertFalse(move.usar_hold)
-        self.assertEqual(4, move.limpas)
-
-    def test_four_wide_does_not_start_without_a_visible_followup_clear(self):
-        lane = 15 << 3
-        sides = d.CHEIA ^ lane
-        rows = [0] * d.LINHAS
-        for row in range(d.LINHAS - 10, d.LINHAS):
-            rows[row] = sides | (lane & ~(1 << 6))
-        pile = frozenset((r, c) for r, mask in enumerate(rows) for c in range(d.COLUNAS)
-                         if mask & (1 << c))
-        single = (0.0, rows, 0, 1, 0, 3,
-                  frozenset({(19, 6), (10, 0), (10, 1), (10, 2)}), "", [], 1, 1)
-        tetris = (0.0, rows, 0, 0, 0, 3,
-                  frozenset((r, 6) for r in range(16, 20)), "", [], 4, 1)
-        with patch.object(d, "_busca", side_effect=[(10.0, tetris), (0.0, single)]), \
-             patch.object(d, "_tem_proximo_clear_4wide", return_value=False):
-            move = d.decidir(pile, "T", "I", ["J"], combo=0, abertura=False)
+        # vale a melhor busca (o tetris), nao um clear forcado
         self.assertFalse(move.usar_hold)
         self.assertEqual(4, move.limpas)
 
@@ -1902,12 +1816,6 @@ class TransitionTests(unittest.TestCase):
         self.assertTrue(move.usar_hold)
         self.assertEqual("T", move.letra)
 
-    def test_one_sided_low_cavity_is_not_mistaken_for_a_four_wide(self):
-        side_cavity = [0] * d.LINHAS
-        for row in range(d.LINHAS - 3, d.LINHAS):
-            side_cavity[row] = (1 << 2) | (1 << 7)
-        self.assertFalse(d._bonus_pocos_combo(d._altura_colunas(side_cavity))[1])
-
     def test_combo_does_not_force_clears_even_if_their_board_score_is_lower(self):
         nonclear = (0.0, [1] + [0] * (d.LINHAS - 1), 0, 0, 0, 3,
                     frozenset(), "", [], 0, 1)
@@ -1955,7 +1863,6 @@ class TransitionTests(unittest.TestCase):
 
     def test_height_18_is_not_a_game_over_threshold(self):
         self.assertEqual(d.LINHAS - 3, d.ALTURA_PERIGO)
-        self.assertEqual(d.ALTURA_PERIGO, d.ALTURA_B2B)
 
         weak_clear = (0.0, [1] + [0] * (d.LINHAS - 1), 0, 1, 0, 3,
                       frozenset(), "", [], 1, 1)
@@ -1981,15 +1888,6 @@ class TransitionTests(unittest.TestCase):
         self.assertIsNotNone(move)
         self.assertEqual(4, move.limpas)
 
-    def test_one_wide_well_bonus_is_disabled(self):
-        central = [0, 0, 8, 2, 8, 0, 0, 0, 0, 0]
-        corner = [2, 8, 0, 0, 0, 0, 0, 0, 0, 0]
-        deep_well = [0] * d.COLUNAS
-        deep_well[3] = deep_well[5] = 4
-        for alturas in (central, corner, deep_well):
-            self.assertEqual(0.0, d._bonus_poco_um(alturas, tem_i=True))
-            self.assertEqual(0.0, d._bonus_poco_um(alturas, tem_i=False))
-
     def test_planner_takes_tetris_and_tsd_when_they_are_ready(self):
         with patch.object(d, "MODO", "ataque"):
             well = [0] * d.LINHAS
@@ -2004,7 +1902,7 @@ class TransitionTests(unittest.TestCase):
             slot[-1] = d.CHEIA ^ (1 << 4)
             slot[-2] = d.CHEIA ^ (7 << 3)
             slot[-3] = 1 << 3
-            self.assertEqual((1, 3), d._slots(slot))
+            self.assertEqual((1, 3), d._slots_detalhes(slot)[:2])
             slot_pile = frozenset((r, c) for r, mask in enumerate(slot) for c in range(d.COLUNAS)
                                   if mask & (1 << c))
             tspin = d.decidir(slot_pile, "T", None, [], permitir_hold=False)
@@ -2165,11 +2063,11 @@ class TspinSlotOverhangTests(unittest.TestCase):
         antigo = d.USAR_SPINS
         d.USAR_SPINS = False
         try:
-            d._slots_prontos.cache_clear()
+            d._slots_detalhes_cache.cache_clear()
             self.assertEqual(1, d._buracos_efetivos(rows))
         finally:
             d.USAR_SPINS = antigo
-            d._slots_prontos.cache_clear()
+            d._slots_detalhes_cache.cache_clear()
 
     def test_ready_slot_scores_better_than_the_stage_two_board(self):
         pronto = self._slot()
